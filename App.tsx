@@ -1,33 +1,43 @@
-import React from 'react';
-import { View, StyleSheet } from 'react-native';
-import Header from './src/screens/src/components/header';
-import Footer from './src/screens/src/components/footer';
-import BodyPage from './src/screens/src/components/bodypage';
+import React, { useState } from "react";
+import { NavigationContainer } from "@react-navigation/native";
+import { createNativeStackNavigator } from "@react-navigation/native-stack";
+
+import LoginScreen from "./src/screens/src/components/LoginScreen";
+import HomeScreen from "./src/screens/src/components/HomeScreen";
+
+const Stack = createNativeStackNavigator();
 
 export default function App() {
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [user, setUser] = useState<any>(null);
+
+  console.log("App state:", { isLoggedIn, user });
+
   return (
-    <View style={styles.container}>
-      
-      {/* Header */}
-      <Header name="Navarro" />
-
-      {/* Content Area */}
-      <View style={styles.content}>
-        <BodyPage />
-      </View>
-
-      {/* Footer */}
-      <Footer />
-
-    </View>
+    <NavigationContainer>
+      <Stack.Navigator>
+        {!isLoggedIn ? (
+          <Stack.Screen name="Login">
+            {(props) => (
+              <LoginScreen
+                {...props}
+                setIsLoggedIn={setIsLoggedIn}
+                setUser={setUser}
+              />
+            )}
+          </Stack.Screen>
+        ) : (
+          <Stack.Screen name="Home">
+            {(props) => (
+              <HomeScreen
+                {...props}
+                setIsLoggedIn={setIsLoggedIn}
+                user={user}
+              />
+            )}
+          </Stack.Screen>
+        )}
+      </Stack.Navigator>
+    </NavigationContainer>
   );
 }
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-  },
-  content: {
-    flex: 1, // pushes footer to bottom
-  },
-});
