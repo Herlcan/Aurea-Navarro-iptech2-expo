@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useMemo, useState } from "react";
 import {
   SafeAreaView,
   StatusBar,
@@ -8,14 +8,10 @@ import {
   TouchableOpacity,
   View,
   FlatList,
-  ActivityIndicator,
-  Alert,
 } from "react-native";
 
-import { supabase } from "./supabase";
-
 type Task = {
-  id: number;
+  id: string;
   title: string;
   done: boolean;
 };
@@ -23,95 +19,42 @@ type Task = {
 export default function App() {
   const [text, setText] = useState("");
   const [tasks, setTasks] = useState<Task[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  // GET TASKS
-  const fetchTasks = async () => {
-    const { data, error } = await supabase
-      .from("tasks")
-      .select("*")
-      .order("id", { ascending: false });
-
-    if (error) {
-      console.log("FETCH ERROR:", error.message);
-      Alert.alert("Error fetching tasks", error.message);
-    } else {
-      setTasks(data || []);
-    }
-
-    setLoading(false);
-  };
-
-  useEffect(() => {
-    fetchTasks();
-  }, []);
 
   // ADD TASK
-  const addTask = async () => {
+  const addTask = () => {
     if (!text.trim()) return;
 
-    const { data, error } = await supabase
-      .from("tasks")
-      .insert([
-        {
-          title: text,
-          done: false,
-        },
-      ])
-      .select();
+    const newTask: Task = {
+      id: Date.now().toString(),
+      title: text,
+      done: false,
+    };
 
-    if (error) {
-      console.log("INSERT ERROR:", error.message);
-      Alert.alert("Insert Failed", error.message);
-    } else {
-      console.log("INSERT SUCCESS:", data);
-      setText("");
-      fetchTasks();
-    }
+    setTasks([newTask, ...tasks]);
+    setText("");
   };
 
-  // TOGGLE TASK
-  const toggleTask = async (id: number, current: boolean) => {
-    const { error } = await supabase
-      .from("tasks")
-      .update({ done: !current })
-      .eq("id", id);
-
-    if (error) {
-      console.log("UPDATE ERROR:", error.message);
-      Alert.alert("Update Failed", error.message);
-    } else {
-      fetchTasks();
-    }
+  // TOGGLE TASK STATUS
+  const toggleTask = (id: string) => {
+    setTasks(
+      tasks.map((tasks) =>
+        tasks.id === id
+          ? { ...tasks, done: !tasks.done }
+          : tasks
+      )
+    );
   };
 
   // DELETE TASK
-  const deleteTask = async (id: number) => {
-    const { error } = await supabase
-      .from("tasks")
-      .delete()
-      .eq("id", id);
-
-    if (error) {
-      console.log("DELETE ERROR:", error.message);
-      Alert.alert("Delete Failed", error.message);
-    } else {
-      fetchTasks();
-    }
+  const deleteTask = (id: string) => {
+    setTasks(tasks.filter((tasks) => tasks.id !== id));
   };
 
-  const completed = useMemo(
-    () => tasks.filter((t) => t.done).length,
+  // COMPLETED COUNT
+  const totalDone = useMemo(
+    () => tasks.filter((tasks) => tasks.done).length,
     [tasks]
   );
-
-  if (loading) {
-    return (
-      <View style={styles.loading}>
-        <ActivityIndicator size="large" color="#fff" />
-      </View>
-    );
-  }
 
   return (
     <SafeAreaView style={styles.container}>
@@ -120,46 +63,101 @@ export default function App() {
       {/* HEADER */}
       <View style={styles.header}>
         <Text style={styles.title}>Tasks</Text>
-        <Text style={styles.counter}>
-          {completed}/{tasks.length}
-        </Text>
+
+        <View style={styles.counterBox}>
+          <Text style={styles.counterText}>
+            {totalDone}/{tasks.length}
+          </Text>
+        </View>
       </View>
 
       {/* INPUT */}
-      <View style={styles.inputRow}>
+      <View style={styles.inputWrapper}>
         <TextInput
+          placeholder="Add a task..."
+          placeholderTextColor="#7C7C80"
           value={text}
           onChangeText={setText}
-          placeholder="Add a task..."
-          placeholderTextColor="#777"
           style={styles.input}
         />
 
-        <TouchableOpacity style={styles.button} onPress={addTask}>
-          <Text style={styles.buttonText}>Add</Text>
+        <TouchableOpacity
+          style={styles.addButton}
+          onPress={addTask}
+          activeOpacity={0.8}
+        >
+          <Text style={styles.addText}>Add</Text>
         </TouchableOpacity>
       </View>
 
-      {/* LIST */}
+      {/* TASK LIST */}
       <FlatList
         data={tasks}
-        keyExtractor={(item) => item.id.toString()}
+        keyExtractor={(item) => item.id}
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={{
+          paddingBottom: 40,
+        }}
+        ListEmptyComponent={
+          <View style={styles.emptyState}>
+            <Text style={styles.emptyTitle}>
+              No tasks yet
+            </Text>
+
+            <Text style={styles.emptySubtitle}>
+              Add something important to do.
+            </Text>
+          </View>
+        }
         renderItem={({ item }) => (
-          <View style={styles.card}>
+          <View style={styles.taskCard}>
+
+            {/* LEFT SIDE */}
             <TouchableOpacity
-              style={{ flex: 1 }}
-              onPress={() => toggleTask(item.id, item.done)}
+              style={styles.taskLeft}
+              activeOpacity={0.8}
+              onPress={() => toggleTask(item.id)}
             >
-              <Text style={[styles.task, item.done && styles.done]}>
-                {item.title}
-              </Text>
-              <Text style={styles.status}>
-                {item.done ? "Completed" : "Pending"}
-              </Text>
+              <View
+                style={[
+                  styles.circle,
+                  item.done && styles.circleDone,
+                ]}
+              >
+                {item.done && (
+                  <Text style={styles.check}>✓</Text>
+                )}
+              </View>
+
+              <View>
+                <Text
+                  style={[
+                    styles.taskText,
+                    item.done && styles.taskDone,
+                  ]}
+                >
+                  {item.title}
+                </Text>
+
+                <Text
+                  style={[
+                    styles.statusText,
+                    item.done
+                      ? styles.completedStatus
+                      : styles.pendingStatus,
+                  ]}
+                >
+                  {item.done ? "Completed" : "Pending"}
+                </Text>
+              </View>
             </TouchableOpacity>
 
-            <TouchableOpacity onPress={() => deleteTask(item.id)}>
-              <Text style={styles.delete}>✕</Text>
+            {/* DELETE BUTTON */}
+            <TouchableOpacity
+              onPress={() => deleteTask(item.id)}
+              style={styles.deleteButton}
+            >
+              <Text style={styles.deleteText}>✕</Text>
             </TouchableOpacity>
           </View>
         )}
@@ -171,88 +169,161 @@ export default function App() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#111",
-    padding: 20,
-  },
-
-  loading: {
-    flex: 1,
-    backgroundColor: "#111",
-    justifyContent: "center",
-    alignItems: "center",
+    backgroundColor: "#111111",
+    paddingHorizontal: 22,
+    paddingTop: 60,
   },
 
   header: {
     flexDirection: "row",
     justifyContent: "space-between",
-    marginBottom: 20,
+    alignItems: "center",
+    marginBottom: 28,
   },
 
   title: {
-    color: "#fff",
-    fontSize: 32,
+    color: "#FFFFFF",
+    fontSize: 34,
     fontWeight: "700",
+    letterSpacing: -1,
   },
 
-  counter: {
-    color: "#aaa",
-    fontSize: 16,
+  counterBox: {
+    backgroundColor: "#1C1C1E",
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 14,
   },
 
-  inputRow: {
+  counterText: {
+    color: "#A1A1AA",
+    fontSize: 14,
+    fontWeight: "600",
+  },
+
+  inputWrapper: {
     flexDirection: "row",
-    marginBottom: 20,
+    marginBottom: 28,
   },
 
   input: {
     flex: 1,
-    backgroundColor: "#1c1c1e",
-    color: "#fff",
-    padding: 14,
-    borderRadius: 12,
-    marginRight: 10,
+    backgroundColor: "#1C1C1E",
+    color: "#FFFFFF",
+    paddingHorizontal: 18,
+    paddingVertical: 16,
+    borderRadius: 18,
+    fontSize: 16,
+    marginRight: 12,
   },
 
-  button: {
-    backgroundColor: "#fff",
-    paddingHorizontal: 16,
+  addButton: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 18,
+    paddingHorizontal: 20,
     justifyContent: "center",
-    borderRadius: 12,
-  },
-
-  buttonText: {
-    color: "#000",
-    fontWeight: "700",
-  },
-
-  card: {
-    flexDirection: "row",
-    backgroundColor: "#1c1c1e",
-    padding: 16,
-    borderRadius: 14,
-    marginBottom: 12,
     alignItems: "center",
   },
 
-  task: {
-    color: "#fff",
+  addText: {
+    color: "#111111",
+    fontWeight: "700",
+    fontSize: 15,
+  },
+
+  taskCard: {
+    backgroundColor: "#1C1C1E",
+    borderRadius: 20,
+    padding: 18,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 14,
+  },
+
+  taskLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    flex: 1,
+  },
+
+  circle: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: "#3A3A3C",
+    marginRight: 14,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+
+  circleDone: {
+    backgroundColor: "#FFFFFF",
+    borderColor: "#FFFFFF",
+  },
+
+  check: {
+    color: "#111111",
+    fontSize: 13,
+    fontWeight: "700",
+  },
+
+  taskText: {
+    color: "#FFFFFF",
     fontSize: 16,
+    fontWeight: "500",
   },
 
-  done: {
+  taskDone: {
     textDecorationLine: "line-through",
-    color: "#777",
+    color: "#7C7C80",
   },
 
-  status: {
-    color: "#888",
-    fontSize: 12,
+  statusText: {
     marginTop: 4,
+    fontSize: 13,
+    fontWeight: "500",
   },
 
-  delete: {
-    color: "#ff4d4d",
-    fontSize: 18,
-    paddingLeft: 10,
+  completedStatus: {
+    color: "#4ADE80",
+  },
+
+  pendingStatus: {
+    color: "#FACC15",
+  },
+
+  deleteButton: {
+    marginLeft: 12,
+    backgroundColor: "#2A2A2D",
+    width: 34,
+    height: 34,
+    borderRadius: 10,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+
+  deleteText: {
+    color: "#FF6B6B",
+    fontSize: 16,
+    fontWeight: "700",
+  },
+
+  emptyState: {
+    marginTop: 100,
+    alignItems: "center",
+  },
+
+  emptyTitle: {
+    color: "#FFFFFF",
+    fontSize: 22,
+    fontWeight: "600",
+    marginBottom: 8,
+  },
+
+  emptySubtitle: {
+    color: "#7C7C80",
+    fontSize: 15,
   },
 });
