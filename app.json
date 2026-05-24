@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "Navarro-iptech2-app",
-    "slug": "Navarro-iptech2-app",
+    "name": "TaskHub",
+    "slug": "TaskHub",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
