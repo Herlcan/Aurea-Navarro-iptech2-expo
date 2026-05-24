@@ -838,7 +838,7 @@ const styles = StyleSheet.create({
   taskCard: {
     backgroundColor: "#1a1f3a",
     borderRadius: 16,
-    padding: 24,
+    padding: 14,
     flexDirection: "row",
     alignItems: "center",
     marginBottom: 12,
