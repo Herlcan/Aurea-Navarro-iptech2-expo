@@ -53,6 +53,11 @@ export const signUpWithEmail = async (email: string, password: string, username:
     const { data: authData, error: signUpError } = await supabase.auth.signUp({
       email,
       password,
+      options: {
+        data: {
+          username,
+        },
+      },
     });
 
     console.log("Auth signup error:", signUpError);
@@ -69,6 +74,20 @@ export const signUpWithEmail = async (email: string, password: string, username:
     }
 
     console.log("✅ User created in auth with ID:", authData.user.id);
+
+    if (!authData.session) {
+      console.log("📧 Email confirmation required before profile creation");
+      return {
+        success: true,
+        requiresEmailConfirmation: true,
+        user: {
+          id: authData.user.id,
+          email: authData.user.email,
+          username,
+          createdAt: new Date().toISOString(),
+        },
+      };
+    }
 
     // Store user profile in custom profiles table
     const profileData = {
@@ -142,7 +161,7 @@ export const signInWithEmail = async (email: string, password: string) => {
       .from("profiles")
       .select("*")
       .eq("id", authData.user.id)
-      .single();
+      .maybeSingle();
 
     console.log("Profile fetch error:", profileError);
     console.log("Profile data:", profileData);
@@ -150,6 +169,43 @@ export const signInWithEmail = async (email: string, password: string) => {
     if (profileError) {
       console.error("❌ Profile fetch error:", profileError);
       throw profileError;
+    }
+
+    if (!profileData) {
+      const username =
+        authData.user.user_metadata?.username ||
+        authData.user.email?.split("@")[0] ||
+        "user";
+
+      const profileDataToCreate = {
+        id: authData.user.id,
+        email: authData.user.email,
+        username,
+        created_at: new Date().toISOString(),
+      };
+
+      const { data: createdProfile, error: createProfileError } = await supabase
+        .from("profiles")
+        .insert([profileDataToCreate])
+        .select()
+        .single();
+
+      if (createProfileError) {
+        console.error("❌ Profile creation after confirmation failed:", createProfileError);
+        throw createProfileError;
+      }
+
+      console.log("✅ Profile created after email confirmation");
+
+      return {
+        success: true,
+        user: {
+          id: authData.user.id,
+          email: createdProfile.email,
+          username: createdProfile.username,
+          createdAt: createdProfile.created_at,
+        },
+      };
     }
 
     console.log("✅ Profile fetched successfully");

@@ -39,3 +39,10 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+#graphify
+.graphify_python
+.agents
+.codex
+graphify-out
+

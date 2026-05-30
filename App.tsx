@@ -10,10 +10,11 @@ import {
   FlatList,
   Modal,
   ScrollView,
-  Switch,
   Alert,
   ActivityIndicator,
+  Platform,
 } from "react-native";
+import * as Notifications from "expo-notifications";
 import AuthScreen from "./src/screens/src/components/AuthScreen";
 import {
   createTask,
@@ -22,6 +23,7 @@ import {
   deleteTask,
   toggleTask,
   signOut,
+  getCurrentUser,
 } from "./supabaseHelpers";
 
 type Priority = "low" | "medium" | "high";
@@ -44,10 +46,104 @@ type User = {
   createdAt: string;
 };
 
+const NOTIFICATION_CHANNEL_ID = "task-reminders";
+
+if (Platform.OS !== "web") {
+  Notifications.setNotificationHandler({
+    handleNotification: async () => ({
+      shouldShowBanner: true,
+      shouldShowList: true,
+      shouldPlaySound: true,
+      shouldSetBadge: false,
+    }),
+  });
+}
+
+const getTaskNotificationId = (taskId: string) => `task-reminder-${taskId}`;
+
+const parseDueDateInput = (value: string) => {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  const match = trimmed.match(
+    /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2}))?$/
+  );
+  if (!match) return null;
+
+  const [, yearValue, monthValue, dayValue, hourValue = "09", minuteValue = "00"] = match;
+  const year = Number(yearValue);
+  const month = Number(monthValue);
+  const day = Number(dayValue);
+  const hour = Number(hourValue);
+  const minute = Number(minuteValue);
+  const date = new Date(year, month - 1, day, hour, minute, 0, 0);
+
+  if (
+    date.getFullYear() !== year ||
+    date.getMonth() !== month - 1 ||
+    date.getDate() !== day ||
+    date.getHours() !== hour ||
+    date.getMinutes() !== minute
+  ) {
+    return null;
+  }
+
+  return date;
+};
+
+const formatDueDateForInput = (dueDate?: string | null) => {
+  if (!dueDate) return "";
+  const date = new Date(dueDate);
+  if (Number.isNaN(date.getTime())) return "";
+
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(
+    date.getDate()
+  )} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+};
+
+const formatDueDateForDisplay = (dueDate?: string | null) => {
+  if (!dueDate) return "";
+  const date = new Date(dueDate);
+  if (Number.isNaN(date.getTime())) return "";
+
+  return `Due ${date.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  })}`;
+};
+
+const isTaskOverdue = (task: Task) => {
+  if (!task.dueDate || task.done) return false;
+  return new Date(task.dueDate).getTime() < Date.now();
+};
+
+const ensureNotificationPermissions = async () => {
+  if (Platform.OS === "web") return false;
+
+  if (Platform.OS === "android") {
+    await Notifications.setNotificationChannelAsync(NOTIFICATION_CHANNEL_ID, {
+      name: "Task reminders",
+      importance: Notifications.AndroidImportance.HIGH,
+      vibrationPattern: [0, 250, 250, 250],
+      lightColor: "#4FACFE",
+    });
+  }
+
+  const currentPermissions = await Notifications.getPermissionsAsync();
+  if (currentPermissions.status === "granted") return true;
+
+  const requestedPermissions = await Notifications.requestPermissionsAsync();
+  return requestedPermissions.status === "granted";
+};
+
 export default function App() {
   // AUTHENTICATION STATE
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [user, setUser] = useState<User | null>(null);
+  const [checkingAuth, setCheckingAuth] = useState(true);
 
   // TASK STATE
   const [text, setText] = useState("");
@@ -56,10 +152,123 @@ export default function App() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editText, setEditText] = useState("");
   const [editPriority, setEditPriority] = useState<Priority>("medium");
+  const [editDueDateInput, setEditDueDateInput] = useState("");
   const [selectedPriority, setSelectedPriority] = useState<Priority>("medium");
+  const [dueDateInput, setDueDateInput] = useState("");
   const [showModal, setShowModal] = useState(false);
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   const [loadingTasks, setLoadingTasks] = useState(false);
   const [syncing, setSyncing] = useState(false);
+
+  const resetTaskForm = () => {
+    setText("");
+    setSelectedPriority("medium");
+    setDueDateInput("");
+  };
+
+  const clearLocalSession = () => {
+    if (Platform.OS !== "web") {
+      Notifications.cancelAllScheduledNotificationsAsync().catch((error) => {
+        console.warn("Could not clear scheduled notifications:", error);
+      });
+    }
+
+    setIsLoggedIn(false);
+    setUser(null);
+    setTasks([]);
+    setText("");
+    setDueDateInput("");
+    setEditingId(null);
+    setEditText("");
+    setEditDueDateInput("");
+  };
+
+  const cancelTaskNotification = async (taskId: string) => {
+    if (Platform.OS === "web") return;
+
+    try {
+      await Notifications.cancelScheduledNotificationAsync(
+        getTaskNotificationId(taskId)
+      );
+    } catch (error) {
+      console.warn("Could not cancel task notification:", error);
+    }
+  };
+
+  const scheduleTaskNotification = async (task: Task) => {
+    if (!task.dueDate || task.done || Platform.OS === "web") return false;
+
+    const dueDate = new Date(task.dueDate);
+    if (Number.isNaN(dueDate.getTime()) || dueDate.getTime() <= Date.now()) {
+      await cancelTaskNotification(task.id);
+      return false;
+    }
+
+    const hasPermission = await ensureNotificationPermissions();
+    if (!hasPermission) return false;
+
+    const identifier = getTaskNotificationId(task.id);
+    try {
+      await Notifications.cancelScheduledNotificationAsync(identifier);
+      await Notifications.scheduleNotificationAsync({
+        identifier,
+        content: {
+          title: "Task due now",
+          body: task.title,
+          data: { taskId: task.id },
+        },
+        trigger: {
+          type: Notifications.SchedulableTriggerInputTypes.DATE,
+          date: dueDate,
+          channelId: NOTIFICATION_CHANNEL_ID,
+        },
+      });
+    } catch (error) {
+      console.warn("Could not schedule task notification:", error);
+      return false;
+    }
+
+    return true;
+  };
+
+  const syncTaskNotifications = async (nextTasks: Task[]) => {
+    if (Platform.OS === "web") return;
+
+    for (const task of nextTasks) {
+      if (task.dueDate && !task.done) {
+        await scheduleTaskNotification(task);
+      } else {
+        await cancelTaskNotification(task.id);
+      }
+    }
+  };
+
+  // RESTORE SAVED SESSION AFTER REFRESH
+  useEffect(() => {
+    let mounted = true;
+
+    const restoreSession = async () => {
+      try {
+        const result = await getCurrentUser();
+        if (mounted && result.success && result.user) {
+          setUser(result.user);
+          setIsLoggedIn(true);
+        }
+      } catch (error) {
+        console.warn("Could not restore saved session:", error);
+      } finally {
+        if (mounted) {
+          setCheckingAuth(false);
+        }
+      }
+    };
+
+    restoreSession();
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   // LOAD TASKS FROM SUPABASE
   useEffect(() => {
@@ -75,6 +284,7 @@ export default function App() {
       const result = await getTasks(user.id);
       if (result.success) {
         setTasks(result.tasks);
+        await syncTaskNotifications(result.tasks);
       } else {
         Alert.alert("Error", "Failed to load tasks");
       }
@@ -99,7 +309,12 @@ export default function App() {
     const priorityOrder = { high: 0, medium: 1, low: 2 };
     return [...filteredTasks].sort((a, b) => {
       if (a.done === b.done) {
-        return priorityOrder[a.priority] - priorityOrder[b.priority];
+        const prioritySort = priorityOrder[a.priority] - priorityOrder[b.priority];
+        if (prioritySort !== 0) return prioritySort;
+
+        const aDue = a.dueDate ? new Date(a.dueDate).getTime() : Number.MAX_SAFE_INTEGER;
+        const bDue = b.dueDate ? new Date(b.dueDate).getTime() : Number.MAX_SAFE_INTEGER;
+        return aDue - bDue;
       }
       return a.done ? 1 : -1;
     });
@@ -117,18 +332,39 @@ export default function App() {
       return;
     }
 
+    const dueDate = parseDueDateInput(dueDateInput);
+    if (dueDateInput.trim() && !dueDate) {
+      Alert.alert("Invalid Due Date", "Use YYYY-MM-DD HH:mm, for example 2026-06-15 14:30.");
+      return;
+    }
+
+    if (dueDate && dueDate.getTime() <= Date.now()) {
+      Alert.alert("Invalid Due Date", "Please choose a future due date and time.");
+      return;
+    }
+
     setSyncing(true);
     try {
       const result = await createTask(user.id, {
         title: text,
         priority: selectedPriority,
         description: "",
+        dueDate: dueDate?.toISOString(),
       });
 
       if (result.success && result.task) {
-        setTasks([result.task, ...tasks]);
-        setText("");
-        setSelectedPriority("medium");
+        const newTask = result.task;
+        setTasks([newTask, ...tasks]);
+        if (newTask.dueDate) {
+          const scheduled = await scheduleTaskNotification(newTask);
+          if (!scheduled && Platform.OS !== "web") {
+            Alert.alert(
+              "Task Saved",
+              "The task was created, but notification permission was not granted."
+            );
+          }
+        }
+        resetTaskForm();
         setShowModal(false);
       } else {
         Alert.alert("Error", result.error || "Failed to create task");
@@ -152,11 +388,13 @@ export default function App() {
       const result = await toggleTask(id, task.done);
 
       if (result.success) {
-        setTasks(
-          tasks.map((t) =>
-            t.id === id ? { ...t, done: !t.done } : t
-          )
-        );
+        const updatedTask = { ...task, done: !task.done };
+        setTasks(tasks.map((t) => (t.id === id ? updatedTask : t)));
+        if (updatedTask.done) {
+          await cancelTaskNotification(id);
+        } else {
+          await scheduleTaskNotification(updatedTask);
+        }
       } else {
         Alert.alert("Error", result.error || "Failed to update task");
       }
@@ -183,6 +421,7 @@ export default function App() {
 
             if (result.success) {
               setTasks(tasks.filter((task) => task.id !== id));
+              await cancelTaskNotification(id);
             } else {
               Alert.alert("Error", result.error || "Failed to delete task");
             }
@@ -201,6 +440,7 @@ export default function App() {
     setEditingId(task.id);
     setEditText(task.title);
     setEditPriority(task.priority);
+    setEditDueDateInput(formatDueDateForInput(task.dueDate));
   };
 
   const saveEdit = async () => {
@@ -211,24 +451,63 @@ export default function App() {
 
     if (!user) return;
 
+    const dueDate = parseDueDateInput(editDueDateInput);
+    if (editDueDateInput.trim() && !dueDate) {
+      Alert.alert("Invalid Due Date", "Use YYYY-MM-DD HH:mm, for example 2026-06-15 14:30.");
+      return;
+    }
+
+    if (dueDate && dueDate.getTime() <= Date.now()) {
+      Alert.alert("Invalid Due Date", "Please choose a future due date and time.");
+      return;
+    }
+
     setSyncing(true);
     try {
       const result = await updateTask(editingId!, {
         title: editText,
         priority: editPriority,
         description: "",
+        dueDate: dueDate?.toISOString() || null,
       });
 
       if (result.success && result.task) {
+        const updatedDueDate = dueDate?.toISOString();
+        const updatedTask = tasks.find((task) => task.id === editingId);
         setTasks(
           tasks.map((task) =>
             task.id === editingId
-              ? { ...task, title: editText, priority: editPriority }
+              ? {
+                  ...task,
+                  title: editText,
+                  priority: editPriority,
+                  dueDate: updatedDueDate,
+                }
               : task
           )
         );
+        if (updatedTask) {
+          const nextTask = {
+            ...updatedTask,
+            title: editText,
+            priority: editPriority,
+            dueDate: updatedDueDate,
+          };
+          if (nextTask.dueDate) {
+            const scheduled = await scheduleTaskNotification(nextTask);
+            if (!scheduled && Platform.OS !== "web") {
+              Alert.alert(
+                "Task Updated",
+                "The task was saved, but notification permission was not granted."
+              );
+            }
+          } else {
+            await cancelTaskNotification(nextTask.id);
+          }
+        }
         setEditingId(null);
         setEditText("");
+        setEditDueDateInput("");
       } else {
         Alert.alert("Error", result.error || "Failed to update task");
       }
@@ -249,33 +528,34 @@ export default function App() {
 
   // LOGOUT HANDLER
   const handleLogout = () => {
-    Alert.alert("Logout", "Are you sure you want to logout?", [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Logout",
-        style: "destructive",
-        onPress: async () => {
-          setSyncing(true);
-          try {
-            const result = await signOut();
-
-            if (result.success) {
-              setIsLoggedIn(false);
-              setUser(null);
-              setTasks([]);
-              setText("");
-            } else {
-              Alert.alert("Error", result.error || "Logout failed");
-            }
-          } catch (error: any) {
-            Alert.alert("Error", error.message);
-          } finally {
-            setSyncing(false);
-          }
-        },
-      },
-    ]);
+    setShowLogoutConfirm(true);
   };
+
+  const confirmLogout = async () => {
+    setShowLogoutConfirm(false);
+    setSyncing(true);
+    clearLocalSession();
+
+    try {
+      const result = await signOut();
+      if (!result.success) {
+        console.warn("Supabase sign out failed:", result.error);
+      }
+    } catch (error: any) {
+      console.warn("Logout failed after local session clear:", error.message);
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  if (checkingAuth) {
+    return (
+      <SafeAreaView style={styles.authLoadingContainer}>
+        <ActivityIndicator size="large" color="#4FACFE" />
+        <Text style={styles.authLoadingText}>Checking saved session...</Text>
+      </SafeAreaView>
+    );
+  }
 
   // SHOW AUTH SCREEN IF NOT LOGGED IN
   if (!isLoggedIn) {
@@ -459,6 +739,15 @@ export default function App() {
                     </TouchableOpacity>
                   ))}
                 </View>
+                <TextInput
+                  value={editDueDateInput}
+                  onChangeText={setEditDueDateInput}
+                  style={styles.editInput}
+                  placeholder="Due date: YYYY-MM-DD HH:mm"
+                  placeholderTextColor="#7C7C80"
+                  keyboardType="numbers-and-punctuation"
+                />
+                <Text style={styles.dateHint}>Leave blank for no reminder.</Text>
                 <View style={styles.editActions}>
                   <TouchableOpacity
                     style={styles.saveButton}
@@ -469,7 +758,10 @@ export default function App() {
                   </TouchableOpacity>
                   <TouchableOpacity
                     style={styles.cancelButton}
-                    onPress={() => setEditingId(null)}
+                    onPress={() => {
+                      setEditingId(null);
+                      setEditDueDateInput("");
+                    }}
                     disabled={syncing}
                   >
                     <Text style={styles.cancelButtonText}>Cancel</Text>
@@ -514,6 +806,16 @@ export default function App() {
                     >
                       {item.done ? "✓ Completed" : "⏳ Pending"}
                     </Text>
+                    {item.dueDate && (
+                      <Text
+                        style={[
+                          styles.dueDateLabel,
+                          isTaskOverdue(item) && styles.dueDateOverdue,
+                        ]}
+                      >
+                        {formatDueDateForDisplay(item.dueDate)}
+                      </Text>
+                    )}
                     <Text
                       style={[
                         styles.priorityLabel,
@@ -559,13 +861,21 @@ export default function App() {
         animationType="slide"
         transparent={true}
         visible={showModal}
-        onRequestClose={() => setShowModal(false)}
+        onRequestClose={() => {
+          setShowModal(false);
+          resetTaskForm();
+        }}
       >
         <View style={styles.centeredView}>
           <View style={styles.modalView}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Create New Task</Text>
-              <TouchableOpacity onPress={() => setShowModal(false)}>
+              <TouchableOpacity
+                onPress={() => {
+                  setShowModal(false);
+                  resetTaskForm();
+                }}
+              >
                 <Text style={styles.modalClose}>✕</Text>
               </TouchableOpacity>
             </View>
@@ -580,7 +890,7 @@ export default function App() {
               numberOfLines={3}
             />
 
-            <Text style={styles.priorityLabel}>Select Priority</Text>
+            <Text style={styles.modalSectionLabel}>Select Priority</Text>
             <View style={styles.prioritySelectorModal}>
               {(["low", "medium", "high"] as Priority[]).map((p) => (
                 <TouchableOpacity
@@ -613,12 +923,25 @@ export default function App() {
               ))}
             </View>
 
+            <Text style={styles.modalSectionLabel}>Due Date & Reminder</Text>
+            <TextInput
+              placeholder="YYYY-MM-DD HH:mm"
+              placeholderTextColor="#7C7C80"
+              value={dueDateInput}
+              onChangeText={setDueDateInput}
+              style={styles.modalInput}
+              keyboardType="numbers-and-punctuation"
+            />
+            <Text style={styles.dateHint}>
+              Optional. A local notification is scheduled at this date and time.
+            </Text>
+
             <View style={styles.modalActions}>
               <TouchableOpacity
                 style={styles.modalCancelButton}
                 onPress={() => {
                   setShowModal(false);
-                  setText("");
+                  resetTaskForm();
                 }}
               >
                 <Text style={styles.modalCancelText}>Cancel</Text>
@@ -628,6 +951,39 @@ export default function App() {
                 onPress={addTask}
               >
                 <Text style={styles.modalAddText}>Add Task</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* LOGOUT CONFIRMATION */}
+      <Modal
+        animationType="fade"
+        transparent
+        visible={showLogoutConfirm}
+        onRequestClose={() => setShowLogoutConfirm(false)}
+      >
+        <View style={styles.logoutOverlay}>
+          <View style={styles.logoutDialog}>
+            <Text style={styles.logoutDialogTitle}>Logout?</Text>
+            <Text style={styles.logoutDialogMessage}>
+              You will return to the login screen.
+            </Text>
+            <View style={styles.logoutDialogActions}>
+              <TouchableOpacity
+                style={styles.logoutCancelButton}
+                onPress={() => setShowLogoutConfirm(false)}
+                activeOpacity={0.85}
+              >
+                <Text style={styles.logoutCancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.logoutConfirmButton}
+                onPress={confirmLogout}
+                activeOpacity={0.85}
+              >
+                <Text style={styles.logoutConfirmText}>Logout</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -644,6 +1000,21 @@ const styles = StyleSheet.create({
     paddingHorizontal: 24,
     paddingTop: 28,
     paddingBottom: 20,
+  },
+
+  authLoadingContainer: {
+    flex: 1,
+    backgroundColor: "#0a0e27",
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 24,
+  },
+
+  authLoadingText: {
+    color: "#8E92A0",
+    fontSize: 14,
+    fontWeight: "600",
+    marginTop: 14,
   },
 
   header: {
@@ -688,6 +1059,73 @@ const styles = StyleSheet.create({
     color: "#FF6B6B",
     fontSize: 12,
     fontWeight: "700",
+  },
+
+  logoutOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.65)",
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 24,
+  },
+
+  logoutDialog: {
+    width: "100%",
+    maxWidth: 340,
+    backgroundColor: "#1a1f3a",
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#2a3050",
+    padding: 22,
+  },
+
+  logoutDialogTitle: {
+    color: "#FFFFFF",
+    fontSize: 20,
+    fontWeight: "800",
+    marginBottom: 8,
+    textAlign: "center",
+  },
+
+  logoutDialogMessage: {
+    color: "#8E92A0",
+    fontSize: 14,
+    lineHeight: 20,
+    textAlign: "center",
+    marginBottom: 22,
+  },
+
+  logoutDialogActions: {
+    flexDirection: "row",
+    gap: 12,
+  },
+
+  logoutCancelButton: {
+    flex: 1,
+    backgroundColor: "#2a3050",
+    borderRadius: 12,
+    paddingVertical: 13,
+    alignItems: "center",
+  },
+
+  logoutConfirmButton: {
+    flex: 1,
+    backgroundColor: "#FF6B6B",
+    borderRadius: 12,
+    paddingVertical: 13,
+    alignItems: "center",
+  },
+
+  logoutCancelText: {
+    color: "#8E92A0",
+    fontSize: 14,
+    fontWeight: "800",
+  },
+
+  logoutConfirmText: {
+    color: "#FFFFFF",
+    fontSize: 14,
+    fontWeight: "800",
   },
 
   loadingContainer: {
@@ -898,6 +1336,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     gap: 8,
     alignItems: "center",
+    flexWrap: "wrap",
   },
 
   statusText: {
@@ -934,6 +1373,21 @@ const styles = StyleSheet.create({
   priorityLabelLow: {
     color: "#6BCF7F",
     backgroundColor: "rgba(107, 207, 127, 0.1)",
+  },
+
+  dueDateLabel: {
+    color: "#4FACFE",
+    backgroundColor: "rgba(79, 172, 254, 0.1)",
+    fontSize: 11,
+    fontWeight: "600",
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+
+  dueDateOverdue: {
+    color: "#FF6B6B",
+    backgroundColor: "rgba(255, 107, 107, 0.12)",
   },
 
   actionButtons: {
@@ -1117,6 +1571,21 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#3a4060",
     maxHeight: 100,
+  },
+
+  modalSectionLabel: {
+    color: "#FFFFFF",
+    fontSize: 13,
+    fontWeight: "700",
+    marginBottom: 10,
+  },
+
+  dateHint: {
+    color: "#8E92A0",
+    fontSize: 11,
+    lineHeight: 16,
+    marginTop: -8,
+    marginBottom: 16,
   },
 
   prioritySelectorModal: {

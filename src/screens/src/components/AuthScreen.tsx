@@ -11,15 +11,24 @@ import {
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
+  Modal,
 } from "react-native";
 import {
   signUpWithEmail,
   signInWithEmail,
+  signOut,
   checkSupabaseConnection,
   checkProfilesTableExists,
 } from "../../../../supabaseHelpers";
 
 type AuthMode = "login" | "register";
+type FeedbackTone = "success" | "error";
+type FeedbackDialog = {
+  title: string;
+  message: string;
+  tone: FeedbackTone;
+  onClose?: () => void;
+};
 
 export default function AuthScreen({ onAuthSuccess, setUser }: any) {
   const [mode, setMode] = useState<AuthMode>("login");
@@ -31,6 +40,17 @@ export default function AuthScreen({ onAuthSuccess, setUser }: any) {
   const [showPassword, setShowPassword] = useState(false);
   const [showDebug, setShowDebug] = useState(false);
   const [debugInfo, setDebugInfo] = useState<string>("");
+  const [feedbackDialog, setFeedbackDialog] = useState<FeedbackDialog | null>(null);
+
+  const showFeedback = (dialog: FeedbackDialog) => {
+    setFeedbackDialog(dialog);
+  };
+
+  const closeFeedback = () => {
+    const nextAction = feedbackDialog?.onClose;
+    setFeedbackDialog(null);
+    nextAction?.();
+  };
 
   // Simple validation
   const validateEmail = (email: string) => {
@@ -71,17 +91,29 @@ export default function AuthScreen({ onAuthSuccess, setUser }: any) {
   // Handle Login
   const handleLogin = async () => {
     if (!email.trim() || !password.trim()) {
-      Alert.alert("Error", "Please fill in all fields");
+      showFeedback({
+        title: "Missing Details",
+        message: "Please enter your email and password before signing in.",
+        tone: "error",
+      });
       return;
     }
 
     if (!validateEmail(email)) {
-      Alert.alert("Error", "Please enter a valid email");
+      showFeedback({
+        title: "Invalid Email",
+        message: "Please enter a valid email address.",
+        tone: "error",
+      });
       return;
     }
 
     if (password.length < 6) {
-      Alert.alert("Error", "Password must be at least 6 characters");
+      showFeedback({
+        title: "Invalid Password",
+        message: "Password must be at least 6 characters.",
+        tone: "error",
+      });
       return;
     }
 
@@ -91,12 +123,27 @@ export default function AuthScreen({ onAuthSuccess, setUser }: any) {
 
       if (result?.success && result?.user) {
         setUser(result.user);
-        onAuthSuccess();
+        showFeedback({
+          title: "Login Successful",
+          message: "Your credentials are correct. Welcome back!",
+          tone: "success",
+          onClose: onAuthSuccess,
+        });
       } else {
-        Alert.alert("Login Failed", result?.error || "Invalid credentials");
+        showFeedback({
+          title: "Login Failed",
+          message:
+            result?.error ||
+            "Incorrect email or password. Please check your credentials and try again.",
+          tone: "error",
+        });
       }
     } catch (error: any) {
-      Alert.alert("Error", error.message || "Login failed. Please try again.");
+      showFeedback({
+        title: "Login Error",
+        message: error.message || "Login failed. Please try again.",
+        tone: "error",
+      });
     } finally {
       setLoading(false);
     }
@@ -105,27 +152,47 @@ export default function AuthScreen({ onAuthSuccess, setUser }: any) {
   // Handle Register
   const handleRegister = async () => {
     if (!email.trim() || !username.trim() || !password.trim() || !confirmPassword.trim()) {
-      Alert.alert("Error", "Please fill in all fields");
+      showFeedback({
+        title: "Missing Details",
+        message: "Please fill in every field before creating your account.",
+        tone: "error",
+      });
       return;
     }
 
     if (!validateEmail(email)) {
-      Alert.alert("Error", "Please enter a valid email");
+      showFeedback({
+        title: "Invalid Email",
+        message: "Please enter a valid email address.",
+        tone: "error",
+      });
       return;
     }
 
     if (username.length < 3) {
-      Alert.alert("Error", "Username must be at least 3 characters");
+      showFeedback({
+        title: "Invalid Username",
+        message: "Username must be at least 3 characters.",
+        tone: "error",
+      });
       return;
     }
 
     if (password.length < 6) {
-      Alert.alert("Error", "Password must be at least 6 characters");
+      showFeedback({
+        title: "Invalid Password",
+        message: "Password must be at least 6 characters.",
+        tone: "error",
+      });
       return;
     }
 
     if (password !== confirmPassword) {
-      Alert.alert("Error", "Passwords do not match");
+      showFeedback({
+        title: "Password Mismatch",
+        message: "Passwords do not match. Please re-enter them.",
+        tone: "error",
+      });
       return;
     }
 
@@ -136,23 +203,36 @@ export default function AuthScreen({ onAuthSuccess, setUser }: any) {
       console.log("📝 Registration result:", result);
 
       if (result?.success && result?.user) {
-        console.log("✅ Registration success!");
-        setUser(result.user);
-        onAuthSuccess();
-        Alert.alert("Success", `Welcome ${username}!`);
+        console.log("✅ Registration success, waiting for email confirmation");
+        setUser(null);
+        await signOut();
+        showFeedback({
+          title: "Confirmation Email Sent",
+          message:
+            `We sent a confirmation email to ${email}. Please verify your email before signing in.`,
+          tone: "success",
+          onClose: () => {
+            setMode("login");
+            setPassword("");
+            setConfirmPassword("");
+            setUsername("");
+          },
+        });
       } else {
         console.log("❌ Registration failed:", result?.error);
-        Alert.alert(
-          "Registration Failed",
-          result?.error || "Could not create account. Please try again."
-        );
+        showFeedback({
+          title: "Registration Failed",
+          message: result?.error || "Could not create account. Please try again.",
+          tone: "error",
+        });
       }
     } catch (error: any) {
       console.error("❌ Catch error:", error);
-      Alert.alert(
-        "Error",
-        error.message || "Registration failed. Please try again."
-      );
+      showFeedback({
+        title: "Registration Error",
+        message: error.message || "Registration failed. Please try again.",
+        tone: "error",
+      });
     } finally {
       setLoading(false);
     }
@@ -353,6 +433,44 @@ export default function AuthScreen({ onAuthSuccess, setUser }: any) {
           )}
         </ScrollView>
       </KeyboardAvoidingView>
+
+      <Modal
+        visible={feedbackDialog !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={closeFeedback}
+      >
+        <View style={styles.dialogOverlay}>
+          <View style={styles.dialogCard}>
+            <View
+              style={[
+                styles.dialogIcon,
+                feedbackDialog?.tone === "success"
+                  ? styles.dialogIconSuccess
+                  : styles.dialogIconError,
+              ]}
+            >
+              <Text style={styles.dialogIconText}>
+                {feedbackDialog?.tone === "success" ? "✓" : "!"}
+              </Text>
+            </View>
+            <Text style={styles.dialogTitle}>{feedbackDialog?.title}</Text>
+            <Text style={styles.dialogMessage}>{feedbackDialog?.message}</Text>
+            <TouchableOpacity
+              style={[
+                styles.dialogButton,
+                feedbackDialog?.tone === "success"
+                  ? styles.dialogButtonSuccess
+                  : styles.dialogButtonError,
+              ]}
+              onPress={closeFeedback}
+              activeOpacity={0.85}
+            >
+              <Text style={styles.dialogButtonText}>OK</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -591,5 +709,88 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: "500",
   },
-});
 
+  dialogOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.65)",
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 24,
+  },
+
+  dialogCard: {
+    width: "100%",
+    maxWidth: 360,
+    backgroundColor: "#1a1f3a",
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#2a3050",
+    paddingHorizontal: 22,
+    paddingVertical: 24,
+    alignItems: "center",
+  },
+
+  dialogIcon: {
+    width: 54,
+    height: 54,
+    borderRadius: 27,
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 16,
+  },
+
+  dialogIconSuccess: {
+    backgroundColor: "rgba(79, 172, 254, 0.2)",
+    borderWidth: 1,
+    borderColor: "#4FACFE",
+  },
+
+  dialogIconError: {
+    backgroundColor: "rgba(255, 107, 107, 0.18)",
+    borderWidth: 1,
+    borderColor: "#FF6B6B",
+  },
+
+  dialogIconText: {
+    color: "#FFFFFF",
+    fontSize: 26,
+    fontWeight: "800",
+  },
+
+  dialogTitle: {
+    color: "#FFFFFF",
+    fontSize: 20,
+    fontWeight: "800",
+    textAlign: "center",
+    marginBottom: 8,
+  },
+
+  dialogMessage: {
+    color: "#C5CAD8",
+    fontSize: 14,
+    lineHeight: 20,
+    textAlign: "center",
+    marginBottom: 22,
+  },
+
+  dialogButton: {
+    width: "100%",
+    borderRadius: 12,
+    paddingVertical: 13,
+    alignItems: "center",
+  },
+
+  dialogButtonSuccess: {
+    backgroundColor: "#4FACFE",
+  },
+
+  dialogButtonError: {
+    backgroundColor: "#FF6B6B",
+  },
+
+  dialogButtonText: {
+    color: "#FFFFFF",
+    fontSize: 15,
+    fontWeight: "800",
+  },
+});
