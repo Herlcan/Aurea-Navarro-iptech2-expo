@@ -243,6 +243,15 @@ export default function App() {
     }
   };
 
+  const showMessage = (title: string, message: string) => {
+    if (Platform.OS === "web" && typeof window !== "undefined") {
+      window.alert(`${title}\n\n${message}`);
+      return;
+    }
+
+    Alert.alert(title, message);
+  };
+
   // RESTORE SAVED SESSION AFTER REFRESH
   useEffect(() => {
     let mounted = true;
@@ -286,10 +295,10 @@ export default function App() {
         setTasks(result.tasks);
         await syncTaskNotifications(result.tasks);
       } else {
-        Alert.alert("Error", "Failed to load tasks");
+        showMessage("Error", "Failed to load tasks");
       }
     } catch (error: any) {
-      Alert.alert("Error", error.message);
+      showMessage("Error", error.message);
     } finally {
       setLoadingTasks(false);
     }
@@ -323,23 +332,23 @@ export default function App() {
   // ADD TASK
   const addTask = async () => {
     if (!text.trim()) {
-      Alert.alert("Error", "Please enter a task");
+      showMessage("Error", "Please enter a task");
       return;
     }
 
     if (!user) {
-      Alert.alert("Error", "User not logged in");
+      showMessage("Error", "User not logged in");
       return;
     }
 
     const dueDate = parseDueDateInput(dueDateInput);
     if (dueDateInput.trim() && !dueDate) {
-      Alert.alert("Invalid Due Date", "Use YYYY-MM-DD HH:mm, for example 2026-06-15 14:30.");
+      showMessage("Invalid Due Date", "Use YYYY-MM-DD HH:mm, for example 2026-06-15 14:30.");
       return;
     }
 
     if (dueDate && dueDate.getTime() <= Date.now()) {
-      Alert.alert("Invalid Due Date", "Please choose a future due date and time.");
+      showMessage("Invalid Due Date", "Please choose a future due date and time.");
       return;
     }
 
@@ -367,10 +376,10 @@ export default function App() {
         resetTaskForm();
         setShowModal(false);
       } else {
-        Alert.alert("Error", result.error || "Failed to create task");
+        showMessage("Error", result.error || "Failed to create task");
       }
     } catch (error: any) {
-      Alert.alert("Error", error.message);
+      showMessage("Error", error.message);
     } finally {
       setSyncing(false);
     }
@@ -396,43 +405,56 @@ export default function App() {
           await scheduleTaskNotification(updatedTask);
         }
       } else {
-        Alert.alert("Error", result.error || "Failed to update task");
+        showMessage("Error", result.error || "Failed to update task");
       }
     } catch (error: any) {
-      Alert.alert("Error", error.message);
+      showMessage("Error", error.message);
     } finally {
       setSyncing(false);
     }
   };
 
   // DELETE TASK
-  const deleteTaskFromDb = async (id: string) => {
-    if (!user) return;
+  const confirmDeleteTask = (onConfirm: () => void) => {
+    if (Platform.OS === "web" && typeof window !== "undefined") {
+      if (window.confirm("Delete Task\n\nAre you sure you want to delete this task?")) {
+        onConfirm();
+      }
+      return;
+    }
 
     Alert.alert("Delete Task", "Are you sure you want to delete this task?", [
       { text: "Cancel", style: "cancel" },
       {
         text: "Delete",
         style: "destructive",
-        onPress: async () => {
-          setSyncing(true);
-          try {
-            const result = await deleteTask(id);
-
-            if (result.success) {
-              setTasks(tasks.filter((task) => task.id !== id));
-              await cancelTaskNotification(id);
-            } else {
-              Alert.alert("Error", result.error || "Failed to delete task");
-            }
-          } catch (error: any) {
-            Alert.alert("Error", error.message);
-          } finally {
-            setSyncing(false);
-          }
-        },
+        onPress: onConfirm,
       },
     ]);
+  };
+
+  const deleteTaskFromDb = async (id: string) => {
+    if (!user) return;
+
+    confirmDeleteTask(async () => {
+      setSyncing(true);
+      try {
+        const result = await deleteTask(id);
+
+        if (result.success) {
+          setTasks((currentTasks) =>
+            currentTasks.filter((task) => task.id !== id)
+          );
+          await cancelTaskNotification(id);
+        } else {
+          showMessage("Error", result.error || "Failed to delete task");
+        }
+      } catch (error: any) {
+        showMessage("Error", error.message);
+      } finally {
+        setSyncing(false);
+      }
+    });
   };
 
   // EDIT TASK
@@ -445,7 +467,7 @@ export default function App() {
 
   const saveEdit = async () => {
     if (!editText.trim()) {
-      Alert.alert("Error", "Task title cannot be empty");
+      showMessage("Error", "Task title cannot be empty");
       return;
     }
 
@@ -453,12 +475,12 @@ export default function App() {
 
     const dueDate = parseDueDateInput(editDueDateInput);
     if (editDueDateInput.trim() && !dueDate) {
-      Alert.alert("Invalid Due Date", "Use YYYY-MM-DD HH:mm, for example 2026-06-15 14:30.");
+      showMessage("Invalid Due Date", "Use YYYY-MM-DD HH:mm, for example 2026-06-15 14:30.");
       return;
     }
 
     if (dueDate && dueDate.getTime() <= Date.now()) {
-      Alert.alert("Invalid Due Date", "Please choose a future due date and time.");
+      showMessage("Invalid Due Date", "Please choose a future due date and time.");
       return;
     }
 
@@ -509,10 +531,10 @@ export default function App() {
         setEditText("");
         setEditDueDateInput("");
       } else {
-        Alert.alert("Error", result.error || "Failed to update task");
+        showMessage("Error", result.error || "Failed to update task");
       }
     } catch (error: any) {
-      Alert.alert("Error", error.message);
+      showMessage("Error", error.message);
     } finally {
       setSyncing(false);
     }
